@@ -6,8 +6,13 @@
 This plugin integrates Telegram Messenger with Octoprint. It sends messages (with photos if available) on print start, end and failure. Also it sends messages during the print at configurable intervals. That way you don't have to remember to regularly have a look at the printing process.
 Also, you can control Octoprint via messages (settings, start a print and much more). Send `/status` to get the current printer status or `/abort` to abort the current print. Send `/help` for a list of all recognized commands. You may also use this bot in groups.
 
-**Latest release: [1.5.0](https://github.com/fabianonline/OctoPrint-Telegram/releases)**
-
+## My changes
+- Send/Receive GCode
+- Fix Hash-Less files
+- Better support for Klipper (including Print from Virtual SD in /files)
+- M117 notifications (if enabled)
+- Add username or telegram display name to a job when starting
+- For each notification, it is possible to use the owner of the file and the username of who made the action
 
 ## Contents
 
@@ -269,12 +274,3 @@ If you want to talk to other users of this plugin and maybe have some influence 
 you can join the [Octoprint-Telegram-Users-Group](https://telegram.me/joinchat/CXFirQjl9XTp5dr4OZqH9Q).
 
 This software is licensed under [AGPLv3](http://www.gnu.org/licenses/agpl-3.0.txt)
-
-
-## My changes
-- Send/Receive GCode
-- Fix Hash-Less files
-- Better support for Klipper (including Print from Virtual SD in /files)
-- M117 notifications (if enabled)
-- Add username or telegram display name to a job when starting
-- For each notification, it is possible to use the owner of the file and the username of who made the action
