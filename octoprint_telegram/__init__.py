@@ -278,17 +278,30 @@ class TelegramListener(threading.Thread):
 		self._logger.info("Got a command: '" + str(command.encode('utf-8')) + "' with parameter: '" + str(parameter.encode('utf-8')) + "' in chat " + str(message['message']['chat']['id']))
 		# is command  known? 
 		if command not in self.main.tcmd.commandDict:
-			# we dont know the command so skip the message
-			self._logger.warn("Previous command was an unknown command.")
-			self.main.send_msg("I do not understand you! " + self.gEmo('mistake'),chatID=chat_id)
-			raise ExitThisLoopException()
+			if command.split(' ')[0] in self.main.tcmd.commandDict:
+				cmdParts = command.split(' ',1)
+				command = cmdParts[0]
+				parameter = cmdParts[1]
+			elif self.main.filterRegexGCode.match(command) or command in self.main.klipperExtendedGcodeList:
+				# Message looks like gcode. Send to printer
+				parameter = command
+				command = '/gcode'
+			else:
+				# we dont know the command so skip the message
+				self._logger.warn("Previous command was an unknown command.")
+				self.main.send_msg("I do not understand you! " + self.gEmo('mistake'),chatID=chat_id)
+				raise ExitThisLoopException()
 		# check if user is allowed to execute the command
 		if self.main.isCommandAllowed(chat_id,from_id,command):
 			# Track command
 			if command.startswith("/"):
 				self.main.track_action("command/" + command[1:])
+			if command != '/gcode':
+				if command != '/status':
+					self.main.tcmd.gcodeStatus.gcodeSent = False
+			user = message['message']['chat']['first_name'] + " " + message['message']['chat']['last_name']
 			# execute command
-			self.main.tcmd.commandDict[command]['cmd'](chat_id,from_id,command,parameter)
+			self.main.tcmd.commandDict[command]['cmd'](chat_id,from_id,user,command,parameter)
 		else:
 			# user was not alloed to execute this command
 			self._logger.warn("Previous command was from an unauthorized user.")
@@ -484,6 +497,26 @@ class TelegramPlugin(octoprint.plugin.EventHandlerPlugin,
 			'stop': u'\U000025FC'
 		}
 		self.emojis.update(telegramEmojiDict) 
+
+		self.filterRegex = []
+		self.filterRegex.append(re.compile(r"(\s+(ok\s+)?.*(B|T\d*):\d+)"))
+		self.filterRegex.append(re.compile(r"(SD printing byte)"))
+		self.filterRegex.append(re.compile(r"(Not SD printing)"))
+		self.filterRegex.append(re.compile(r"(wait)"))
+		self.filterRegexBusy = re.compile(r"(echo:busy: processing)")
+		
+		self.filterRegexGCode = re.compile(r"^\s*([GMgmTt][0-9]+)")
+		self.klipperExtendedGcodeList = {"QUERY_ENDSTOPS", "QUERY_ENDSTOPS", "SET_GCODE_OFFSET", "SAVE_GCODE_STATE", "RESTORE_GCODE_STATE", "PID_CALIBRATE", "TURN_OFF_HEATERS", "SET_VELOCITY_LIMIT", "SET_HEATER_TEMPERATURE",
+			"SET_PRESSURE_ADVANCE", "STEPPER_BUZZ", "MANUAL_PROBE", "ACCEPT", "ABORT", "TESTZ", "Z_ENDSTOP_CALIBRATE", "TUNING_TOWER", "SET_IDLE_TIMEOUT", "RESTART", "FIRMWARE_RESTART", "SAVE_CONFIG", "STATUS", "HELP",
+			"SET_GCODE_VARIABLE", "SET_PIN", "SET_LED", "SET_SERVO", "MANUAL_STEPPER", "PROBE", "QUERY_PROBE", "PROBE_ACCURACY", "PROBE_CALIBRATE", "BLTOUCH_DEBUG", "DELTA_CALIBRATE", "DELTA_ANALYZE", "BED_TILT_CALIBRATE",
+			"BED_MESH_CALIBRATE", "BED_MESH_OUTPUT", "BED_MESH_MAP", "BED_MESH_CLEAR", "BED_MESH_PROFILE", "BED_SCREWS_ADJUST", "SCREWS_TILT_CALCULATE", "Z_TILT_ADJUST", "SET_DUAL_CARRIAGE", "DUMP_TMC", "INIT_TMC",
+			"INIT_TMC", "SET_TMC_CURRENT", "SET_TMC_FIELD", "ENDSTOP_PHASE_CALIBRATE", "FORCE_MOVE", "SET_KINEMATIC_POSITION", "RESPOND", "PAUSE", "RESUME", "CLEAR_PAUSE", "QUERY_FILAMENT_SENSOR", "SET_FILAMENT_SENSOR",
+			"SET_RETRACTION", "GET_RETRACTION", "SET_SKEW", "GET_CURRENT_SKEW", "CALC_MEASURED_SKEW", "SKEW_PROFILE", "UPDATE_DELAYED_GCODE"}
+		
+		self.gcodeMessageTimer = None#threading.Timer(1, self.sendGCodeMessage)
+		self.gcodeWaitTimer = None
+		self.pausedForUser = False
+
 	# all emojis will be get via this method to disable them globaly by the corrosponding setting	
 	# so if you want to use emojis anywhere use gEmo("...") istead of emojis["..."]
 	def gEmo(self,key):
@@ -629,6 +662,7 @@ class TelegramPlugin(octoprint.plugin.EventHandlerPlugin,
 		# 1.4.1 : 3
 		# 1.4.2 : 3
 		# 1.4.3 : 4
+		# 1.5.2 : 4
 
 	def get_settings_defaults(self):
 		return dict(
@@ -919,9 +953,9 @@ class TelegramPlugin(octoprint.plugin.EventHandlerPlugin,
 				displayVersion=self._plugin_version,
 				type="github_release",
 				current=self._plugin_version,
-				user="fabianonline",
+				user="slvr_pdr",
 				repo="OctoPrint-Telegram",
-				pip="https://github.com/fabianonline/OctoPrint-Telegram/releases/download/{target_version}/release.zip"
+				pip="https://gitlab.com/slvr_pdr/OctoPrint-Telegram/releases/download/{target_version}/release.zip"
 			)
 		)
 
@@ -938,10 +972,11 @@ class TelegramPlugin(octoprint.plugin.EventHandlerPlugin,
 				# Start event handler
 				self.tmsg.startEvent(event, payload, **kwargs)
 			else:
+				#self._logger.debug("Got an event: " + event + " Payload: " + str(payload))
 				# return as fast as possible
 				return
 		except Exception as e:
-			self._logger.debug("Exception: " + str(e))
+			self._logger.debug("Exception: " + str(e) + " Payload: " + str(payload))
 
 ##########
 ### SimpleApi API
@@ -1075,6 +1110,22 @@ class TelegramPlugin(octoprint.plugin.EventHandlerPlugin,
 				self.updateMessageID[chatID] = msg_id
 		except Exception as ex:
 			self._logger.debug("Caught an exception in _send_edit_msg(): " + str(ex))
+
+	# this method is used to delete a sent message
+	def _delete_msg(self,msg_id="",chatID="", **kwargs):
+		try:
+			self._logger.debug("Deleting message " + str(msg_id) + " in chat " + str(chatID))
+			data = {}
+			data['message_id'] = msg_id
+			data['chat_id'] = int(chatID)
+			req = requests.post(self.bot_url + "/deleteMessage", data=data)
+			if req.headers['content-type'] != 'application/json':
+				self._logger.debug(gettext("Unexpected Content-Type. Expected: application/json. Was: %(type)s. Waiting 2 minutes before trying again.", type=req.headers['content-type']))
+				return
+			myJson = req.json()
+			self._logger.debug("REQUEST RES: "+str(myJson))
+		except Exception as ex:
+			self._logger.debug("Caught an exception in _delete_msg(): " + str(ex))
 
 	def _send_msg(self, message="", with_image=False,with_gif=False,responses=None, delay=0, inline = True, chatID = "", markup=None, showWeb=False, **kwargs):
 		if not self.send_messages:
@@ -1610,6 +1661,145 @@ class TelegramPlugin(octoprint.plugin.EventHandlerPlugin,
 				(r"/img/static/(.*)", LargeResponseHandler, dict(path=self._basefolder + "/static/img/", as_attachment=True,allow_client_caching =True))
 				]
 
+	def gcode_received(self, comm_instance, line, *args, **kwargs):
+		if not self.pausedForUser and "echo:busy: paused for user" in line:
+			self.pausedForUser = True
+			#self._plugin_manager.send_plugin_message(self._identifier, dict(type="popup", msg="Printer Paused for User"))
+			self.on_event("PausedForUser", {})
+			return
+		if self.pausedForUser and not "echo:busy: paused for user" in line: 
+			self.pausedForUser = False
+		if self._printer.is_printing():
+			return line
+		try:
+			if self.tcmd.gcodeStatus.gcodeSent:
+				if self.tcmd.gcodeStatus.returnChatID == None:
+					self.tcmd.gcodeStatus.gcodeSent = False
+					return line
+				#FILTER LINES WITH REGEX
+				for regexPattern in self.filterRegex:
+					if regexPattern.match(line) != None:
+						return line
+
+				if self.gcodeWaitTimer:
+					self.gcodeWaitTimer.cancel()
+				self.gcodeWaitTimer = threading.Timer(4, self.stopGCodeWait)
+				self.gcodeWaitTimer.start()
+				
+				if self.filterRegexBusy.match(line) != None:
+					if self.gcodeMessageTimer:
+						self.gcodeMessageTimer.cancel()
+					if self.tcmd.gcodeStatus.response:
+						#Send partial message
+						if self.tcmd.gcodeStatus.lastBusyMsgID != None:
+							msg_id = self.tcmd.gcodeStatus.lastBusyMsgID
+							self.tcmd.gcodeStatus.lastBusyMsgID = None
+							self._delete_msg(chatID=self.tcmd.gcodeStatus.returnChatID, msg_id=msg_id)
+						self.send_msg(self.tcmd.gcodeStatus.response, chatID=self.tcmd.gcodeStatus.returnChatID)
+						self.tcmd.gcodeStatus.lastBusyMsgID = None
+						self.tcmd.gcodeStatus.response = ''
+						self.tcmd.gcodeStatus.busyCount = 0
+					#Show progress
+					msgText = '.' * (self.tcmd.gcodeStatus.busyCount + 1)
+					self.send_msg(msgText, chatID=self.tcmd.gcodeStatus.returnChatID, msg_id=self.tcmd.gcodeStatus.lastBusyMsgID)
+					self.tcmd.gcodeStatus.lastBusyMsgID = self.getUpdateMsgId(self.tcmd.gcodeStatus.returnChatID)
+					#self.tcmd.gcodeStatus.lastMsgID = None
+					self.tcmd.gcodeStatus.busyCount += 1
+				elif line.startswith("ok"):
+					#Send remaining message
+					self._logger.debug("Got ok")
+					if self.gcodeMessageTimer:
+						self.gcodeMessageTimer.cancel()
+					if self.tcmd.gcodeStatus.response:
+						self.sendGCodeMessage()
+					if self.gcodeMessageTimer:
+						self.gcodeMessageTimer.cancel()		   
+					self.tcmd.gcodeStatus.gcodeSent = False
+					if self.tcmd.gcodeStatus.lastBusyMsgID != None:
+						self._delete_msg(chatID=self.tcmd.gcodeStatus.returnChatID, msg_id=self.tcmd.gcodeStatus.lastBusyMsgID)
+						self.tcmd.gcodeStatus.lastBusyMsgID = None						
+					self.send_msg(self.gEmo('heavy check mark'), chatID=self.tcmd.gcodeStatus.returnChatID)
+					self.tcmd.gcodeStatus.response = ''
+					self.tcmd.gcodeStatus.returnChatID = None
+					#self.tcmd.gcodeStatus.lastBusyMsgID = None
+					#self.tcmd.gcodeStatus.lastMsgID = None
+					self.tcmd.gcodeStatus.busyCount = 0
+				else:
+					self.tcmd.gcodeStatus.response += line
+					if self.gcodeMessageTimer:
+						self.gcodeMessageTimer.cancel()
+					self.gcodeMessageTimer = threading.Timer(1, self.sendGCodeMessage)
+					self.gcodeMessageTimer.start()
+					self.tcmd.gcodeStatus.busyCount = 0
+			return line
+		except AttributeError:
+			return line
+	
+	def sendGCodeMessage(self):
+		if not self.tcmd.gcodeStatus.response:
+			return
+		if self.tcmd.gcodeStatus.lastBusyMsgID != None:
+			msg_id = self.tcmd.gcodeStatus.lastBusyMsgID
+			self.tcmd.gcodeStatus.lastBusyMsgID = None
+			self._delete_msg(chatID=self.tcmd.gcodeStatus.returnChatID, msg_id=msg_id)
+		self.send_msg(self.tcmd.gcodeStatus.response, chatID=self.tcmd.gcodeStatus.returnChatID)
+		#, msg_id=self.tcmd.gcodeStatus.lastMsgID)
+		#self.tcmd.gcodeStatus.lastMsgID = self.getUpdateMsgId(self.tcmd.gcodeStatus.returnChatID)
+		#self.tcmd.gcodeStatus.lastBusyMsgID = None
+		self.tcmd.gcodeStatus.response = ''
+		self.tcmd.gcodeStatus.busyCount = 0
+		if self.gcodeMessageTimer:
+			self.gcodeMessageTimer.cancel()
+	
+	def stopGCodeWait(self):
+		if not self.tcmd.gcodeStatus.response:
+			return
+		#Send remaining message
+		if self.gcodeMessageTimer:
+			self.gcodeMessageTimer.cancel()
+		if self.gcodeWaitTimer:
+			self.gcodeWaitTimer.cancel()
+		if self.tcmd.gcodeStatus.response:
+			self.sendGCodeMessage()
+		self.tcmd.gcodeStatus.gcodeSent = False
+		if self.tcmd.gcodeStatus.lastBusyMsgID != None:
+			msg_id = self.tcmd.gcodeStatus.lastBusyMsgID
+			self.tcmd.gcodeStatus.lastBusyMsgID = None
+			self._delete_msg(chatID=self.tcmd.gcodeStatus.returnChatID, msg_id=msg_id)
+		#self.send_msg(self.gEmo('heavy check mark'), chatID=self.tcmd.gcodeStatus.returnChatID)
+		self.tcmd.gcodeStatus.response = ''
+		self.tcmd.gcodeStatus.returnChatID = None
+		#self.tcmd.gcodeStatus.lastBusyMsgID = None
+		#self.tcmd.gcodeStatus.lastMsgID = None
+		self.tcmd.gcodeStatus.busyCount = 0
+	def gcode_sent(self, comm_instance, phase, cmd, cmd_type, gcode, *args, **kwargs):
+		try:
+			if self._printer.is_printing():
+				return
+				#if gcode and gcode == 'M117':
+				#	#Send event message?
+				#	message = cmd.split(' ',1)[1]
+			else:
+				if self.tcmd.gcodeStatus.sendingGCode and gcode == self.tcmd.gcodeStatus.lastCmd: #cmd.split(' ',1)[0] == self.tcmd.gcodeStatus.lastCmd:
+					self.tcmd.gcodeStatus.response = ''
+					self.tcmd.gcodeStatus.gcodeSent = True
+					self.tcmd.gcodeStatus.sendingGCode = False
+					self.gcodeWaitTimer = threading.Timer(4, self.stopGCodeWait)
+					self.gcodeWaitTimer.start()
+					self._logger.debug("Sent GCode confirmed")
+				elif self.tcmd.gcodeStatus.sendingGCode:
+					self._logger.debug("Wrong GCode: " + gcode)												 
+			return
+		except AttributeError:
+			return
+			
+			
+	def gcode_queuing(self, comm_instance, phase, cmd, cmd_type, gcode, *args, **kwargs):
+		if gcode and cmd.startswith("M117"):
+			msgTxt=re.sub(r'^M117\s?', '', cmd)
+			self.on_event("M117Alert", {"m117Text":msgTxt})
+			#self._plugin_manager.send_plugin_message(self._identifier, dict(type="popup", msg=msgTxt)) #CHECK SETTINGS?
+			return
 ########################################
 ########################################
 ### Some methods to check version and
@@ -1674,5 +1864,8 @@ __plugin_name__ = "Telegram Notifications"
 __plugin_implementation__ = get_implementation_class()
 __plugin_hooks__ = {
 	"octoprint.plugin.softwareupdate.check_config": __plugin_implementation__.get_update_information,
-	"octoprint.server.http.routes": __plugin_implementation__.route_hook
+	"octoprint.server.http.routes": __plugin_implementation__.route_hook,
+	"octoprint.comm.protocol.gcode.received": __plugin_implementation__.gcode_received,
+	"octoprint.comm.protocol.gcode.sent": __plugin_implementation__.gcode_sent,
+	"octoprint.comm.protocol.gcode.queuing": __plugin_implementation__.gcode_queuing
 }

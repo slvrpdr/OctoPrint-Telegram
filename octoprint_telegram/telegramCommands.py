@@ -2,6 +2,7 @@ from __future__ import absolute_import
 import logging, sarge, hashlib, datetime, time, operator, socket
 import octoprint.filemanager
 import requests
+import os
 from flask.ext.babel import gettext
 from .telegramNotifications import telegramMsgDict
 
@@ -10,7 +11,9 @@ from .telegramNotifications import telegramMsgDict
 # Each command has its own handler. If you want to add/del commands, read the following:
 # SEE DOCUMENTATION IN WIKI: https://github.com/fabianonline/OctoPrint-Telegram/wiki/Add%20commands%20and%20notifications
 ################################################################################################################
-
+class EmptyClass():
+	pass
+	
 class TCMD():
 	def __init__(self, main):
 		self.main = main
@@ -35,6 +38,8 @@ class TCMD():
 			'/togglepause':	{'cmd': self.cmdTogglePause},
 			'/shutup':  	{'cmd': self.cmdShutup},
 			'/dontshutup':  {'cmd': self.cmdNShutup},
+			'/gcode':  		{'cmd': self.cmdGCode, 'param': True}, #ps add gcode
+			'/g':  			{'cmd': self.cmdGCode, 'param': True}, #ps add gcode
 			'/print':  		{'cmd': self.cmdPrint, 'param': True},
 			'/files':  		{'cmd': self.cmdFiles, 'param': True},
 			'/upload':  	{'cmd': self.cmdUpload},
@@ -46,21 +51,31 @@ class TCMD():
 			'/tune':		{'cmd': self.cmdTune, 'param': True},
 			'/help':  		{'cmd': self.cmdHelp, 'bind_none': True}
 		}
-		
+		self.gcodeStatus = EmptyClass() #ps add gcode
+		self.gcodeStatus.waitingForGCode = False
+		self.gcodeStatus.sendingGCode = False
+		self.gcodeStatus.gcodeSent = False
+		self.gcodeStatus.lastCmd = ''
+		self.gcodeStatus.response = ''
+		self.gcodeStatus.returnChatID = None
+		self.gcodeStatus.lastMsgID = None
+		self.gcodeStatus.lastBusyMsgID = None
+		self.gcodeStatus.menuMsgID = None
+		self.gcodeStatus.busyCount = 0
 
 ############################################################################################
 # COMMAND HANDLERS
 ############################################################################################
-	def cmdYes(self,chat_id,from_id,cmd,parameter):
+	def cmdYes(self,chat_id,from_id,user,cmd,parameter):
 		self.main.send_msg(gettext("Alright."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id),inline=False)
 ############################################################################################
-	def cmdNo(self,chat_id,from_id,cmd,parameter):
+	def cmdNo(self,chat_id,from_id,user,cmd,parameter):
 		self.main.send_msg(gettext("Maybe next time."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id),inline=False)
 ############################################################################################
-	def cmdTest(self,chat_id,from_id,cmd,parameter):
+	def cmdTest(self,chat_id,from_id,user,cmd,parameter):
 		self.main.send_msg(self.gEmo('question') + gettext(" Is this a test?\n\n") , responses=[[[self.main.emojis['check']+gettext(" Yes"),"Yes"], [self.main.emojis['cross mark']+gettext(" No"),"No"]]],chatID=chat_id)
 ############################################################################################
-	def cmdStatus(self,chat_id,from_id,cmd,parameter):
+	def cmdStatus(self,chat_id,from_id,user,cmd,parameter):
 		if not self.main._printer.is_operational():
 			with_image = self.main._settings.get_boolean(["image_not_connected"])
 			with_gif = False #self.main._settings.get_boolean(["gif_not_connected"])
@@ -70,7 +85,56 @@ class TCMD():
 		else:
 			self.main.on_event("StatusNotPrinting", {},chatID=chat_id)
 ############################################################################################
-	def cmdGif(self,chat_id,from_id,cmd,parameter): #GWE 05/05/2019 add command to get gif
+	def cmdGCode(self,chat_id,from_id,user,cmd,parameter):
+		if not self.main._printer.is_operational():
+			msg_id=""#self.main.getUpdateMsgId(chat_id) if self.gcodeStatus.waitingForGCode else ""
+			self.gcodeStatus.waitingForGCode = False
+			with_image = self.main._settings.get_boolean(["image_not_connected"])
+			self.main.send_msg(self.gEmo('warning') + gettext(" Not connected to a printer. Use /con to connect."),chatID=chat_id,inline=False, msg_id = msg_id,with_image=with_image)
+			return
+		if parameter and parameter != 'back' and parameter != 'bltouch' and parameter != 'temperature':
+			msg_id=self.gcodeStatus.menuMsgID if self.gcodeStatus.menuMsgID else "" 
+			self.gcodeStatus.menuMsgID = None
+			#self.gcodeStatus.waitingForGCode = False
+			gcode = parameter
+			if gcode.split(' ',1)[0].upper() != 'M117':
+				gcode = gcode.upper();
+			else:
+				gcodeSplit = gcode.split(' ',1);
+				gcode = gcodeSplit[0].upper() + ' ' + gcodeSplit[1]
+			if not self.main._printer.is_printing():
+				self.main.send_msg(self.gEmo('info') + gettext(" Sending GCode: '") + gcode + "'",chatID=chat_id, msg_id = msg_id,markup="Markdown")
+				#self.gcodeStatus.infoMsgID = self.getUpdateMsgId(self.gcodeStatus.returnChatID)
+				self.gcodeStatus.lastCmd = gcode.split(' ',1)[0]
+				self.gcodeStatus.sendingGCode = True
+				self.gcodeStatus.returnChatID = chat_id
+				self.main._printer.commands(gcode)
+			else:
+				self.main.send_msg(self.gEmo('warning') + gettext(" We are currently printing. GCode ignored. ") + gcode,chatID=chat_id, msg_id = msg_id,markup="Markdown")
+		elif parameter == 'back':
+			#self.gcodeStatus.waitingForGCode = False
+			msg_id = self.gcodeStatus.menuMsgID;
+			self.main.send_msg(gettext("Maybe next time."),chatID=chat_id, msg_id = msg_id)
+			self.gcodeStatus.menuMsgID = None
+		elif parameter == 'bltouch':
+			#Show bltouch menu
+			msg_id = self.gcodeStatus.menuMsgID;
+			keys = [[[self.main.emojis['anticlockwise downwards and upwards open circle arrows']+" Reset","/gcode_M280 P0 S160"],[self.main.emojis['test tube']+" Self-Test",'/gcode_M280 P0 S120']],[[self.main.emojis['upwards black arrow']+" Stow",'/gcode_M280 P0 S90'],[self.main.emojis['downwards black arrow']+" Deploy",'/gcode_M280 P0 S10']],[[self.main.emojis['leftwards arrow with hook']+gettext(" Back"),"/gcode_back"]]]
+			self.main.send_msg("BLTouch",responses=keys,chatID=chat_id, msg_id = msg_id)
+		elif parameter == 'temperature':
+			#Show temperature menu
+			msg_id = self.gcodeStatus.menuMsgID;
+			keys = [[["Preheat Hotend (210" + u"\u2103" + ")","/gcode_M104 S210"],["Preheat Bed (70" + u"\u2103" + ")","/gcode_M140 S70"]],[["Cooldown Hotend","/gcode_M104 S0"],["Cooldown Bed","/gcode_M140 S0"]],[[self.main.emojis['leftwards arrow with hook']+gettext(" Back"),"/gcode_back"]]]
+			self.main.send_msg("Temperature",responses=keys,chatID=chat_id, msg_id = msg_id)
+		else:
+			#Show Menu
+			#self.gcodeStatus.waitingForGCode = True
+			msg = self.gEmo('info') + gettext(" Select GCode to send")
+			self.main.send_msg(msg,responses=[[[self.main.emojis['house building']+" G28","/gcode_G28"],[self.main.emojis['right-pointing magnifying glass']+" G29","/gcode_G29"]],[[self.main.emojis['right-pointing magnifying glass']+" BLTouch","/gcode_bltouch"],[self.main.emojis['thermometer']+' Temperature',"/gcode_temperature"]],[[self.main.emojis['leftwards arrow with hook']+gettext(" Back"),"/gcode_back"]]],chatID=chat_id,markup="Markdown")
+			self.gcodeStatus.menuMsgID = self.main.getUpdateMsgId(chat_id)
+
+############################################################################################
+	def cmdGif(self,chat_id,from_id,user,cmd,parameter): #GWE 05/05/2019 add command to get gif
 		if self.main._settings.get(["send_gif"]):
 			if not self.main._printer.is_operational():
 				with_image = self.main._settings.get_boolean(["image_not_connected"])
@@ -90,7 +154,7 @@ class TCMD():
 			self.main.send_msg(self.gEmo('dizzy face') + " Sending GIF is disabled in plugin settings.",chatID=chat_id)
 
 ############################################################################################
-	def cmdSuperGif(self,chat_id,from_id,cmd,parameter): #GWE 05/05/2019 add command to get gif
+	def cmdSuperGif(self,chat_id,from_id,user,cmd,parameter): #GWE 05/05/2019 add command to get gif
 		if self.main._settings.get(["send_gif"]):
 			if not self.main._printer.is_operational():
 				with_image = self.main._settings.get_boolean(["image_not_connected"])
@@ -110,7 +174,7 @@ class TCMD():
 			self.main.send_msg(self.gEmo('dizzy face') + " Sending GIF is disabled in plugin settings.",chatID=chat_id)
 
 ############################################################################################
-	def cmdSettings(self,chat_id,from_id,cmd,parameter):
+	def cmdSettings(self,chat_id,from_id,user,cmd,parameter):
 		if parameter and parameter != "back":
 			params = parameter.split('_')
 			if params[0] == "h":
@@ -122,7 +186,7 @@ class TCMD():
 					else:
 						self.main._settings.set_float(['notification_height'], self.SettingsTemp[0], force=True)
 						self.main._settings.save()
-						self.cmdSettings(chat_id,from_id,cmd,"back")
+						self.cmdSettings(chat_id,from_id,user,cmd,"back")
 						return
 					if self.SettingsTemp[0] < 0:
 						self.SettingsTemp[0] = 0
@@ -142,7 +206,7 @@ class TCMD():
 					else:
 						self.main._settings.set_int(['notification_time'], self.SettingsTemp[1], force=True)
 						self.main._settings.save()
-						self.cmdSettings(chat_id,from_id,cmd,"back")
+						self.cmdSettings(chat_id,from_id,user,cmd,"back")
 						return
 					if self.SettingsTemp[1] < 0:
 						self.SettingsTemp[1] = 0
@@ -159,7 +223,7 @@ class TCMD():
 				else:
 					self.main._settings.set_int(['send_gif'], 1, force=True)
 				self.main._settings.save()
-				self.cmdSettings(chat_id,from_id,cmd,"back")
+				self.cmdSettings(chat_id,from_id,user,cmd,"back")
 				return
 		else:
 			if self.main._settings.get_boolean(["send_gif"]):
@@ -177,9 +241,9 @@ class TCMD():
 			msg_id=self.main.getUpdateMsgId(chat_id) if parameter == "back" else ""
 			self.main.send_msg(msg, responses=[[[self.main.emojis['height']+gettext(" Set height"),"/settings_h"], [self.main.emojis['clock']+gettext(" Set time"),"/settings_t"], [self.main.emojis['movie camera']+gettext(gif_txt),"/settings_g"]], [[self.main.emojis['cross mark']+gettext(" Close"),"No"]]],chatID=chat_id,msg_id=msg_id,markup="Markdown")
 ############################################################################################
-	def cmdAbort(self,chat_id,from_id,cmd,parameter):
+	def cmdAbort(self,chat_id,from_id,user,cmd,parameter):
 		if parameter and parameter == "stop":
-			self.main._printer.cancel_print()
+			self.main._printer.cancel_print(user=user)
 			self.main.send_msg(self.gEmo('info') + gettext(" Aborting the print."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id))
 		else:
 			if self.main._printer.is_printing():
@@ -187,7 +251,7 @@ class TCMD():
 			else:
 				self.main.send_msg(self.gEmo('info') + gettext(" Currently I'm not printing, so there is nothing to stop."),chatID=chat_id,inline=False)		
 ############################################################################################
-	def cmdTogglePause(self,chat_id,from_id,cmd,parameter):
+	def cmdTogglePause(self,chat_id,from_id,user,cmd,parameter):
 		msg = ""
 		if self.main._printer.is_printing():
 			msg =self.gEmo('hourglass') + " Pausing the print."
@@ -199,7 +263,7 @@ class TCMD():
 			msg = "  Currently I'm not printing, so there is nothing to pause/resume."		
 		self.main.send_msg(msg, chatID=chat_id,inline=False)
 ############################################################################################							
-	def cmdShutup(self,chat_id,from_id,cmd,parameter):
+	def cmdShutup(self,chat_id,from_id,user,cmd,parameter):
 		if chat_id not in self.main.shut_up:
 			self.main.shut_up[chat_id] = 0
 		self.main.shut_up[chat_id] += 1
@@ -208,12 +272,12 @@ class TCMD():
 			self.main.shutdown()
 		self.main.send_msg(self.gEmo('noNotify') + gettext(" Okay, shutting up until the next print is finished." + self.gEmo('shutup')+" Use /dontshutup to let me talk again before that. "),chatID=chat_id,inline=False)
 ############################################################################################
-	def cmdNShutup(self,chat_id,from_id,cmd,parameter):
+	def cmdNShutup(self,chat_id,from_id,user,cmd,parameter):
 		if chat_id in self.main.shut_up:
 			self.main.shut_up[chat_id] = 0
 		self.main.send_msg(self.gEmo('notify') + gettext(" Yay, I can talk again."),chatID=chat_id,inline=False)
 ############################################################################################
-	def cmdPrint(self,chat_id,from_id,cmd,parameter):
+	def cmdPrint(self,chat_id,from_id,user,cmd,parameter):
 		if parameter and len(parameter.split('|')) == 1:
 			if parameter =="s": # start print
 				data = self.main._printer.get_current_data()
@@ -224,20 +288,36 @@ class TCMD():
 				elif self.main._printer.is_printing():
 					self.main.send_msg(self.gEmo('warning') + " A print job is already running. You can't print two thing at the same time. Maybe you want to use /abort?",chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id))
 				else:
-					self.main._printer.start_print()
+					self.main._printer.start_print(user=user)
 					self.main.send_msg(self.gEmo('rocket') + gettext(" Started the print job."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id))
 			elif parameter == "x": # do not print
 				self.main._printer.unselect_file()
 				self.main.send_msg(gettext("Maybe next time."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id))
 			else:	# prepare print
-				self._logger.debug("Looking for hash: %s", parameter)
-				destination, file , f = self.find_file_by_hash(parameter)
+				virtualsd = False
+				if parameter.split('_',1)[0] == 'virtualsd' and self.main._settings.get(["klipper_support"]):
+					self._logger.debug("Virtual SD Print: " + parameter.split('_',1)[1])
+					destination=octoprint.filemanager.FileDestinations.SDCARD
+					file = parameter.split('_',1)[1]
+					virtualsd = True
+				else:
+					self._logger.debug("Looking for hash: %s", parameter)
+					destination, file , f = self.find_file_by_hash(parameter)
+				
 				if file is None:
 					msg = self.gEmo('warning') + " I'm sorry, but I couldn't find the file you wanted me to print. Perhaps you want to have a look at /list again?"
 					self.main.send_msg(msg,chatID=chat_id,noMarkup=True, msg_id = self.main.getUpdateMsgId(chat_id))
 					return
 				if destination==octoprint.filemanager.FileDestinations.SDCARD:
 					self.main._printer.select_file(file, True, printAfterSelect=False)
+					self._logger.debug("Using SD: %s", file)
+					if virtualsd:
+						data = self.main._printer.get_current_data()
+						count = 0
+						while data['job']['file']['name'] != file and count < 30:
+							time.sleep(0.1)
+							data = self.main._printer.get_current_data()
+							count = count + 1
 				else:
 					file = self.main._file_manager.path_on_disk(octoprint.filemanager.FileDestinations.LOCAL, file)
 					self._logger.debug("Using full path: %s", file)
@@ -249,11 +329,12 @@ class TCMD():
 				elif not self.main._printer.is_operational():
 					self.main.send_msg(self.gEmo('warning') + gettext(" Can't start printing: I'm not connected to a printer."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id))
 				else:
+					self._logger.debug("Problems on loading the file for print")
 					self.main.send_msg(self.gEmo('warning') + gettext(" Uh oh... Problems on loading the file for print."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id))
 		else:
-			self.cmdFiles(chat_id,from_id,cmd,parameter)
+			self.cmdFiles(chat_id,from_id,user,cmd,parameter)
 ############################################################################################
-	def cmdFiles(self,chat_id,from_id,cmd,parameter):
+	def cmdFiles(self,chat_id,from_id,user,cmd,parameter):
 		if parameter:
 			par = 		parameter.split('|')
 			pathHash = 	par[0]
@@ -274,7 +355,7 @@ class TCMD():
 			if len(storages.keys()) < 2:
 				self.main.send_msg("Loading files...",chatID=chat_id)
 				self.generate_dir_hash_dict()
-				self.cmdFiles(chat_id,from_id,cmd,self.hashMe(str(storages.keys()[0]+"/"),8)+"|0")
+				self.cmdFiles(chat_id,from_id,user,cmd,self.hashMe(str(storages.keys()[0]+"/"),8)+"|0")
 			else:
 				self.generate_dir_hash_dict()
 				keys=[]
@@ -283,10 +364,10 @@ class TCMD():
 				msg_id=self.main.getUpdateMsgId(chat_id) if parameter == "back" else ""
 				self.main.send_msg(self.gEmo('save') + " *Select Storage*",chatID=chat_id,markup="Markdown",responses=keys,msg_id=msg_id)
 ############################################################################################
-	def cmdUpload(self,chat_id,from_id,cmd,parameter):
+	def cmdUpload(self,chat_id,from_id,user,cmd,parameter):
 		self.main.send_msg(self.gEmo('info') + " To upload a gcode file, just send it to me.\nThe file will be stored in 'TelegramPlugin' folder.",chatID=chat_id)
 ############################################################################################
-	def cmdSys(self,chat_id,from_id,cmd,parameter):
+	def cmdSys(self,chat_id,from_id,user,cmd,parameter):
 		if parameter and parameter != "back":
 			params = parameter.split('_')
 			if params[0] == "sys":
@@ -392,7 +473,7 @@ class TCMD():
 			msg_id=self.main.getUpdateMsgId(chat_id) if parameter == "back" else ""
 			self.main.send_msg(message,chatID=chat_id,responses=keys,msg_id=msg_id)
 ############################################################################################
-	def cmdCtrl(self,chat_id,from_id,cmd,parameter):
+	def cmdCtrl(self,chat_id,from_id,user,cmd,parameter):
 		if not self.main._printer.is_operational():
 			self.main.send_msg(self.gEmo('warning')+" Printer not connected. You can't send any command.",chatID=chat_id)
 			return
@@ -442,7 +523,7 @@ class TCMD():
 			msg_id=self.main.getUpdateMsgId(chat_id) if parameter == "back" else ""
 			self.main.send_msg(message,chatID=chat_id,responses=keys,msg_id = msg_id)
 ############################################################################################
-	def cmdUser(self,chat_id,from_id,cmd,parameter):
+	def cmdUser(self,chat_id,from_id,user,cmd,parameter):
 		msg = self.gEmo('info') + " *Your user settings:*\n\n"
 		msg += "*ID:* " + str(chat_id) + "\n"
 		msg += "*Name:* " + self.main.chats[chat_id]['title'] + "\n"
@@ -487,7 +568,7 @@ class TCMD():
 
 		self.main.send_msg(msg, chatID=chat_id, markup="Markdown")
 ############################################################################################
-	def cmdConnection(self,chat_id,from_id,cmd,parameter):
+	def cmdConnection(self,chat_id,from_id,user,cmd,parameter):
 		if parameter and parameter != "back":
 			params = parameter.split('|')
 			if params[0] == "s":
@@ -509,7 +590,7 @@ class TCMD():
 			else:
 				self.main.send_msg(msg,responses=[[[self.main.emojis['electric plug']+gettext(" Connect"),"/con_c"],[self.main.emojis['settings']+gettext(" Defaults"),"/con_s"],[self.main.emojis['cross mark']+gettext(" Close"),"No"]]],chatID=chat_id,msg_id=msg_id,markup="Markdown")
 ############################################################################################
-	def cmdTune(self,chat_id,from_id,cmd,parameter):
+	def cmdTune(self,chat_id,from_id,user,cmd,parameter):
 		if parameter and parameter != "back":
 			params = parameter.split('_')
 			if params[0] == "feed":
@@ -523,7 +604,7 @@ class TCMD():
 						self.tuneTemp[0] -= base/(10**len(params[1]))
 					else:
 						self.main._printer.feed_rate(int(self.tuneTemp[0]))
-						self.cmdTune(chat_id,from_id,cmd,"back")
+						self.cmdTune(chat_id,from_id,user,cmd,"back")
 						return
 					if self.tuneTemp[0] < 50:
 						self.tuneTemp[0] = 50
@@ -546,7 +627,7 @@ class TCMD():
 						self.tuneTemp[1] -= base/(10**len(params[1]))
 					else:
 						self.main._printer.flow_rate(int(self.tuneTemp[1]))
-						self.cmdTune(chat_id,from_id,cmd,"back")
+						self.cmdTune(chat_id,from_id,user,cmd,"back")
 						return
 					if self.tuneTemp[1] < 50:
 						self.tuneTemp[1] = 200
@@ -571,12 +652,12 @@ class TCMD():
 						self.tempTemp[toolNo] -= base/(10**len(params[2]))
 					elif params[2].startswith('s'):
 						self.main._printer.set_temperature("tool"+str(toolNo),self.tempTemp[toolNo])
-						self.cmdTune(chat_id,from_id,cmd,"back")
+						self.cmdTune(chat_id,from_id,user,cmd,"back")
 						return
 					else:
 						self.main._printer.set_temperature("tool"+str(toolNo),0)
 						self.tempTemp[toolNo] = 0
-						self.cmdTune(chat_id,from_id,cmd,"back")
+						self.cmdTune(chat_id,from_id,user,cmd,"back")
 						return
 					if self.tempTemp[toolNo] < 0:
 						self.tempTemp[toolNo] = 0
@@ -600,12 +681,12 @@ class TCMD():
 						self.tempTemp[toolNo] -= base/(10**len(params[1]))
 					elif params[1].startswith('s'):
 						self.main._printer.set_temperature("bed",self.tempTemp[toolNo])
-						self.cmdTune(chat_id,from_id,cmd,"back")
+						self.cmdTune(chat_id,from_id,user,cmd,"back")
 						return
 					else:
 						self.main._printer.set_temperature("bed",0)
 						self.tempTemp[toolNo] = 0
-						self.cmdTune(chat_id,from_id,cmd,"back")
+						self.cmdTune(chat_id,from_id,user,cmd,"back")
 						return
 					if self.tempTemp[toolNo] < 0:
 						self.tempTemp[toolNo] = 0
@@ -637,7 +718,7 @@ class TCMD():
 			keys.append([[self.main.emojis['cross mark']+gettext(" Close"),"No"]])
 			self.main.send_msg(msg, responses=keys,chatID=chat_id,msg_id=msg_id,markup="Markdown")
 ############################################################################################
-	def cmdFilament(self,chat_id,from_id,cmd,parameter):
+	def cmdFilament(self,chat_id,from_id,user,cmd,parameter):
 		if parameter and parameter != "back":
 			self._logger.info("Parameter received for filament: %s" % parameter)
 			params = parameter.split('_')
@@ -730,7 +811,7 @@ class TCMD():
 			self.main.send_msg(message,chatID=chat_id,responses=keys,msg_id=msg_id)
 
 ############################################################################################	
-	def cmdHelp(self,chat_id,from_id,cmd,parameter):
+	def cmdHelp(self,chat_id,from_id,user,cmd,parameter):
 		self.main.send_msg(self.gEmo('info') + gettext(" *The following commands are known:*\n\n"
 		                           "/abort - Aborts the currently running print. A confirmation is required.\n"
 		                           "/shutup - Disables automatic notifications till the next print ends.\n"
@@ -769,7 +850,34 @@ class TCMD():
 		array = []
 		L = {k:v for k,v in files.iteritems() if v['type']=="machinecode"}
 		for key,val in sorted(L.iteritems(), key=lambda x: x[1]['date'] , reverse=True):
-			array.append([self.main.emojis['page facing up']+" "+('.').join(key.split('.')[:-1]),cmd+"_" + pathHash + "|"+str(page)+"|"+ self.hashMe(pathWoDest + key + files[key]['hash'])])
+			emojiType = 'page facing up'
+			try:
+				fileKeyHash = files[key]['hash']
+			except:
+				physicalPath = "/home/pi/.octoprint/uploads/"
+				file_path = os.path.join(physicalPath, key)
+				fileMetadata = self.main._file_manager._storage(dest)._get_metadata_entry(physicalPath, key, default=dict())
+				if not "hash" in fileMetadata:
+					self.updateHash(dest, physicalPath, key)
+					fileMetadata = self.main._file_manager._storage(dest)._get_metadata_entry(physicalPath, key, default=dict())
+				try:
+					fileKeyHash = fileMetadata['hash']
+					emojiType = 'white question mark ornament'
+				except:
+					self._logger.info("File %s has no hash!" % key)
+					emojiType = 'cross mark'
+					fileKeyHash = ""
+				#self._logger.info("Trying to fix... " + fullPath + ", " + key + ", " + dest + ", " + str(files[key]))
+				#self.main._file_manager._storage(dest).add_file(fullPath, key, allow_overwrite=True)
+				#try:
+				#	
+				#	fileList = self.main._file_manager.list_files(path = path, destinations = dest, recursive=False)
+				#	files = fileList[dest]
+				#	fileKeyHash = files[key]['hash']
+				#except:
+				#	self._logger.info("File %s has no hash!" % key)
+				#	emojiType = 'cross mark'
+			array.append([self.main.emojis[emojiType]+" "+('.').join(key.split('.')[:-1]),cmd+"_" + pathHash + "|"+str(page)+"|"+ self.hashMe(pathWoDest + key + fileKeyHash)])
 		arrayD = sorted(arrayD)
 		if not self.main._settings.get_boolean(["fileOrder"]):
 			arrayD.extend(sorted(array))
@@ -803,6 +911,24 @@ class TCMD():
 		keys.append(tmpKeys)
 		pageStr = str(page+1)+"/"+str(len(files)/10 + (1 if len(files)%10 > 0 else 0))
 		self.main.send_msg(self.gEmo('save') + " Files in */"+pathWoDest[:-1]+"*    \["+pageStr+"]",chatID=chat_id,markup="Markdown",responses=keys,msg_id = self.main.getUpdateMsgId(chat_id),delay=wait)
+		
+	def updateHash(self,dest,path,name):
+		file_path = os.path.join(path, name)
+		# save the file's hash to the metadata of the folder
+		file_hash = self.main._file_manager._storage(dest)._create_hash(file_path)
+		metadata = self.main._file_manager._storage(dest)._get_metadata_entry(path, name, default=dict())
+		metadata_dirty = False
+		if not "hash" in metadata or metadata["hash"] != file_hash:
+			# hash changed -> throw away old metadata
+			metadata = dict(hash=file_hash)
+			metadata_dirty = True
+
+		if metadata_dirty:
+			self.main._file_manager._storage(dest)._update_metadata_entry(path, name, metadata)
+			self.main._file_manager._storage(dest)._initialize_metadata()
+			self.main._file_manager._storage(dest)._add_links(name, path, [])
+			os.utime(file_path, None)
+	
 ############################################################################################
 	def fileDetails(self,pathHash,page,cmd,fileHash,chat_id,from_id,wait=0):
 		dest, path, file = self.find_file_by_hash(fileHash)
@@ -856,6 +982,7 @@ class TCMD():
 			else:
 				msg += "\n<b>"+self.main.emojis['money bag']+"Cost:</b> -" 
 		keyPrint = [self.main.emojis['rocket']+" Print","/print_"+fileHash]
+		keyPrintSD = [self.main.emojis['rocket']+" Print from Virtual SD","/print_virtualsd_"+path]
 		keyDetails = [self.main.emojis['left-pointing magnifying glass']+" Details",cmd+"_"+pathHash+"|"+str(page)+"|"+fileHash+"|inf"]
 		keyDownload = [self.main.emojis['save']+" Download",cmd+"_"+pathHash+"|"+str(page)+"|"+fileHash+"|dl"]
 		keyMove = [self.main.emojis['black scissors']+" Move",cmd+"_"+pathHash+"|"+str(page)+"|"+fileHash+"|m"]
@@ -867,6 +994,8 @@ class TCMD():
 		chkID = chat_id 
 		if self.main.isCommandAllowed(chat_id, from_id, "/print"):
 			keysRow.append(keyPrint)
+			if self.main._settings.get(["klipper_support"]):
+				keysRow.append(keyPrintSD)
 		keysRow.append(keyDetails)
 		keys.append(keysRow)
 		keysRow = []
@@ -1169,7 +1298,8 @@ class TCMD():
 		return array
 ############################################################################################
 	def hashMe(self, text, length = 32):
-		return hashlib.md5(text).hexdigest()[0:length]
+		ret = hashlib.md5(text).hexdigest()[0:length]
+		return ret
 ############################################################################################
 # CONNECTION HELPERS
 ############################################################################################

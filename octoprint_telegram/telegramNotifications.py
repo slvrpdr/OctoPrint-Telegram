@@ -26,21 +26,21 @@ telegramMsgDict = {
 				'markup': "off"
 			},
 			'PrintStarted': {
-				'text': gettext("Started printing {file}."),
+				'text': gettext("{user} started printing {file}."),
 				'image': True,
 				'gif': False,
 				'combined' : True,
 				'markup': "off"
 			},
 			'PrintPaused': {
-				'text': gettext("Paused printing {file} at {percent}%%. {time_left} remaining."),
+				'text': gettext("Paused printing {file} at {percent}%. {time_left} remaining."),
 				'image': True,
 				'gif': False,
 				'combined' : True,
 				'markup': "off"
 			},
 			'PrintResumed': {
-				'text': gettext("Resumed printing {file} at {percent}%%. {time_left} remaining."),
+				'text': gettext("Resumed printing {file} at {percent}%. {time_left} remaining."),
 				'image': True,
 				'gif': False,
 				'combined' : True,
@@ -54,14 +54,14 @@ telegramMsgDict = {
 				'markup': "off"
 			},
 			'ZChange': {
-				'text': gettext("Printing at Z={z}.\nBed {bed_temp}/{bed_target}, Extruder {e1_temp}/{e1_target}.\n{time_done}, {percent}%% done, {time_left} remaining.\nCompleted time {time_finish}."),
+				'text': gettext("Printing at Z={z}.\nBed {bed_temp}/{bed_target}, Extruder {e1_temp}/{e1_target}.\n{time_done}, {percent}% done, {time_left} remaining.\nCompleted time {time_finish}."),
 				'image': True,
 				'gif': False,
 				'combined' : True,
 				'markup': "off"
 			},
 			'PrintDone': {
-				'text': gettext("Finished printing {file}."),
+				'text': gettext("Finished printing {owner}'s {file}."),
 				'image': True,
 				'gif': False,
 				'combined' : True,
@@ -78,6 +78,27 @@ telegramMsgDict = {
 			'StatusPrinting': {
 				'bind_msg': 'ZChange',
 				'no_setting': True
+			},
+			'PausedForUser': {
+				'text': gettext("Paused for user input."),
+				'image': True,
+				'gif': False,
+				'combined' : True,
+				'markup': "off"
+			},
+			'M117Alert': {
+				'text': gettext("Message received: {m117Text}"),
+				'image': True,
+				'gif': False,
+				'combined' : True,
+				'markup': "off"
+			},
+			'PrintCancelled': {
+				'text': gettext("{user} cancelled {owner}'s print {file}."),
+				'image': True,
+				'gif': False,
+				'combined' : True,
+				'markup': "off"
 			}
 		}
 
@@ -111,7 +132,10 @@ class TMSG():
 			'ZChange': self.msgZChange,
 			'PrintDone': self.msgPrintDone,
 			'StatusNotPrinting': self.msgStatusNotPrinting,
-			'StatusPrinting': self.msgStatusPrinting
+			'StatusPrinting': self.msgStatusPrinting,
+			'PausedForUser': self.msgPausedForUser,
+			'M117Alert': self.msgM117,
+			'PrintCancelled': self.msgCancelled
 		}
 
 	def startEvent(self, event, payload, **kwargs):
@@ -164,6 +188,15 @@ class TMSG():
 		self.track = False
 		self._sendNotification(payload, **kwargs)
 
+	def msgPausedForUser(self, payload, **kwargs):
+		self._sendNotification(payload, **kwargs)
+		
+	def msgM117(self, payload, **kwargs):
+		self._sendNotification(payload, **kwargs)
+		
+	def msgCancelled(self, payload, **kwargs):
+		self._sendNotification(payload, **kwargs)
+		
 	def _sendNotification(self, payload, **kwargs):
 		status = self.main._printer.get_current_data()
 		event = kwargs['event']
@@ -198,14 +231,29 @@ class TMSG():
 			time_left = gettext('[Unknown]')
 		file = status['job']['file']['name']
 		path = status['job']['file']['path']
+		owner = status['job']['user']
+		if owner == None:
+			owner = ''
+			if owner == '_api':
+				owner = ''
+		if "user" in payload:
+			user = payload['user']
+			if user == None:
+				user = ''
+			if user == '_api':
+				user = ''
+		else:
+			user = ''
 		if "file" in payload: file = payload["file"]
 		if "gcode" in payload: file = payload["gcode"]
 		if "filename" in payload: file = payload["filename"]
+		if "m117Text" in payload: m117Text = payload["m117Text"]
 		self._logger.debug("VARS - " + str(locals()))
 		emo = EmojiFormatter(self.main)
 		try:
 			# call format with emo class object to handle emojis, otherwise use locals
-			message = self.main._settings.get(["messages",kwargs['event'],"text"]).encode('utf-8').format(emo,**locals())
+			message = self.main._settings.get(["messages",kwargs['event'],"text"]).encode('utf-8').format(emo,**locals()).lstrip().replace(" 's ", " ")
+			message = self.capfirst(message)
 		except Exception as ex:
 			self._logger.debug("Exception on formatting message: " + str(ex))
 			message =  self.main.gEmo('warning') + " ERROR: I was not able to format the Notification for '"+event+"' properly. Please open your OctoPrint settings for " + self.main._plugin_name + " and check message settings for '" + event + "'."
@@ -219,6 +267,9 @@ class TMSG():
 		if self.track:
 			self.main.track_action("notification/" + event)
 		self.track = True
+
+	def capfirst(self, s):
+		return s[:1].upper() + s[1:]
 
 	# Helper to determine if notification will be send on gcode ZChange event
 	# depends on notification time and notification height
