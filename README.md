@@ -269,3 +269,12 @@ If you want to talk to other users of this plugin and maybe have some influence 
 you can join the [Octoprint-Telegram-Users-Group](https://telegram.me/joinchat/CXFirQjl9XTp5dr4OZqH9Q).
 
 This software is licensed under [AGPLv3](http://www.gnu.org/licenses/agpl-3.0.txt)
+
+
+## My changes
+- Send/Receive GCode
+- Fix Hash-Less files
+- Better support for Klipper (including Print from Virtual SD in /files)
+- M117 notifications (if enabled)
+- Add username or telegram display name to a job when starting
+- For each notification, it is possible to use the owner of the file and the username of who made the action
