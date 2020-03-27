@@ -49,7 +49,8 @@ class TCMD():
 			'/con': 		{'cmd': self.cmdConnection, 'param': True},
 			'/user': 		{'cmd': self.cmdUser},
 			'/tune':		{'cmd': self.cmdTune, 'param': True},
-			'/help':  		{'cmd': self.cmdHelp, 'bind_none': True}
+			'/help':  		{'cmd': self.cmdHelp, 'bind_none': True},
+			'/virtualsd':  	{'cmd': self.cmdVirtualSD, 'param': True} #ps add virtualsd
 		}
 		self.gcodeStatus = EmptyClass() #ps add gcode
 		self.gcodeStatus.waitingForGCode = False
@@ -294,15 +295,18 @@ class TCMD():
 				self.main._printer.unselect_file()
 				self.main.send_msg(gettext("Maybe next time."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id))
 			else:	# prepare print
-				virtualsd = False
-				if parameter.split('_',1)[0] == 'virtualsd' and self.main._settings.get(["klipper_support"]):
-					self._logger.debug("Virtual SD Print: " + parameter.split('_',1)[1])
-					destination=octoprint.filemanager.FileDestinations.SDCARD
-					file = parameter.split('_',1)[1]
-					virtualsd = True
-				else:
-					self._logger.debug("Looking for hash: %s", parameter)
-					destination, file , f = self.find_file_by_hash(parameter)
+				#virtualsd = False
+				#if parameter.split('_',1)[0] == 'vsd' and self.main._settings.get(["klipper_support"]):
+				#	self._logger.debug("Looking for hash: %s", parameter.split('_',1)[1])
+				#	destination, file , f = self.find_file_by_hash(parameter)
+				#	self._logger.debug("Virtual SD Print: " + file)
+				#	destination=octoprint.filemanager.FileDestinations.SDCARD
+				#	virtualsd = True
+				#else:
+				#	self._logger.debug("Looking for hash: %s", parameter)
+				#	destination, file , f = self.find_file_by_hash(parameter)
+				self._logger.debug("Looking for hash: %s", parameter)
+				destination, file , f = self.find_file_by_hash(parameter)
 				
 				if file is None:
 					msg = self.gEmo('warning') + " I'm sorry, but I couldn't find the file you wanted me to print. Perhaps you want to have a look at /list again?"
@@ -331,6 +335,42 @@ class TCMD():
 				else:
 					self._logger.debug("Problems on loading the file for print")
 					self.main.send_msg(self.gEmo('warning') + gettext(" Uh oh... Problems on loading the file for print."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id))
+		else:
+			self.cmdFiles(chat_id,from_id,user,cmd,parameter)
+############################################################################################
+	def cmdVirtualSD(self,chat_id,from_id,user,cmd,parameter):
+		if parameter and len(parameter.split('|')) == 1:
+			if not self.main._settings.get(["klipper_support"]):
+				msg = self.gEmo('warning') + " Virtual SD support is disabled. How did you get here?"
+				self.main.send_msg(msg,chatID=chat_id,noMarkup=True, msg_id = self.main.getUpdateMsgId(chat_id))
+				return
+			self._logger.debug("Looking for hash: %s", parameter)
+			destination, file , f = self.find_file_by_hash(parameter)
+			self._logger.debug("Virtual SD Print: " + file)
+			destination=octoprint.filemanager.FileDestinations.SDCARD
+
+			if file is None:
+				msg = self.gEmo('warning') + " I'm sorry, but I couldn't find the file you wanted me to print. Perhaps you want to have a look at /list again?"
+				self.main.send_msg(msg,chatID=chat_id,noMarkup=True, msg_id = self.main.getUpdateMsgId(chat_id))
+				return
+
+			self.main._printer.select_file(file, True, printAfterSelect=False)
+			self._logger.debug("Using SD: %s", file)
+			data = self.main._printer.get_current_data()
+			count = 0
+			while data['job']['file']['name'] != file and count < 30:
+				time.sleep(0.1)
+				data = self.main._printer.get_current_data()
+				count = count + 1
+			data = self.main._printer.get_current_data()
+			if data['job']['file']['name'] is not None:
+				msg = self.gEmo('info') + gettext(" Okay. The file %(file)s is loaded.\n\n"+self.gEmo('question')+" Do you want me to start printing it now?", file=data['job']['file']['name'])
+				self.main.send_msg(msg,noMarkup=True, msg_id = self.main.getUpdateMsgId(chat_id), responses=[[[self.main.emojis['check']+gettext("Print"),"/print_s"], [self.main.emojis['cross mark']+gettext(" Cancel"),"/print_x"]]],chatID=chat_id)
+			elif not self.main._printer.is_operational():
+				self.main.send_msg(self.gEmo('warning') + gettext(" Can't start printing: I'm not connected to a printer."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id))
+			else:
+				self._logger.debug("Problems on loading the file for print")
+				self.main.send_msg(self.gEmo('warning') + gettext(" Uh oh... Problems on loading the file for print."),chatID=chat_id, msg_id = self.main.getUpdateMsgId(chat_id))
 		else:
 			self.cmdFiles(chat_id,from_id,user,cmd,parameter)
 ############################################################################################
@@ -982,7 +1022,7 @@ class TCMD():
 			else:
 				msg += "\n<b>"+self.main.emojis['money bag']+"Cost:</b> -" 
 		keyPrint = [self.main.emojis['rocket']+" Print","/print_"+fileHash]
-		keyPrintSD = [self.main.emojis['rocket']+" Print from Virtual SD","/print_virtualsd_"+path]
+		keyPrintSD = [self.main.emojis['rocket']+" Print from Virtual SD","/virtualsd_"+fileHash]
 		keyDetails = [self.main.emojis['left-pointing magnifying glass']+" Details",cmd+"_"+pathHash+"|"+str(page)+"|"+fileHash+"|inf"]
 		keyDownload = [self.main.emojis['save']+" Download",cmd+"_"+pathHash+"|"+str(page)+"|"+fileHash+"|dl"]
 		keyMove = [self.main.emojis['black scissors']+" Move",cmd+"_"+pathHash+"|"+str(page)+"|"+fileHash+"|m"]
