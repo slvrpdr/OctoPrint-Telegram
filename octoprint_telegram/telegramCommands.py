@@ -63,6 +63,7 @@ class TCMD():
 		self.gcodeStatus.lastBusyMsgID = None
 		self.gcodeStatus.menuMsgID = None
 		self.gcodeStatus.busyCount = 0
+		self.gcodeStatus.wrongGcodeCount = 0
 
 ############################################################################################
 # COMMAND HANDLERS
@@ -104,7 +105,7 @@ class TCMD():
 				gcodeSplit = gcode.split(' ',1);
 				gcode = gcodeSplit[0].upper() + ' ' + gcodeSplit[1]
 			if not self.main._printer.is_printing():
-				self.main.send_msg(self.gEmo('info') + gettext(" Sending GCode: '") + gcode + "'",chatID=chat_id, msg_id = msg_id,markup="Markdown")
+				self.main.send_msg(self.gEmo('info') + gettext(" Sending GCode: '") + gcode.replace('_','\_') + "'",chatID=chat_id, msg_id = msg_id,markup="Markdown")
 				#self.gcodeStatus.infoMsgID = self.getUpdateMsgId(self.gcodeStatus.returnChatID)
 				self.gcodeStatus.lastCmd = gcode.split(' ',1)[0]
 				self.gcodeStatus.sendingGCode = True

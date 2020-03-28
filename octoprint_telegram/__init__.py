@@ -282,7 +282,7 @@ class TelegramListener(threading.Thread):
 				cmdParts = command.split(' ',1)
 				command = cmdParts[0]
 				parameter = cmdParts[1]
-			elif self.main.filterRegexGCode.match(command) or command in self.main.klipperExtendedGcodeList:
+			elif self.main.filterRegexGCode.match(command) or command.split(' ')[0] in self.main.klipperExtendedGcodeList:
 				# Message looks like gcode. Send to printer
 				parameter = command
 				command = '/gcode'
@@ -511,7 +511,7 @@ class TelegramPlugin(octoprint.plugin.EventHandlerPlugin,
 			"SET_GCODE_VARIABLE", "SET_PIN", "SET_LED", "SET_SERVO", "MANUAL_STEPPER", "PROBE", "QUERY_PROBE", "PROBE_ACCURACY", "PROBE_CALIBRATE", "BLTOUCH_DEBUG", "DELTA_CALIBRATE", "DELTA_ANALYZE", "BED_TILT_CALIBRATE",
 			"BED_MESH_CALIBRATE", "BED_MESH_OUTPUT", "BED_MESH_MAP", "BED_MESH_CLEAR", "BED_MESH_PROFILE", "BED_SCREWS_ADJUST", "SCREWS_TILT_CALCULATE", "Z_TILT_ADJUST", "SET_DUAL_CARRIAGE", "DUMP_TMC", "INIT_TMC",
 			"INIT_TMC", "SET_TMC_CURRENT", "SET_TMC_FIELD", "ENDSTOP_PHASE_CALIBRATE", "FORCE_MOVE", "SET_KINEMATIC_POSITION", "RESPOND", "PAUSE", "RESUME", "CLEAR_PAUSE", "QUERY_FILAMENT_SENSOR", "SET_FILAMENT_SENSOR",
-			"SET_RETRACTION", "GET_RETRACTION", "SET_SKEW", "GET_CURRENT_SKEW", "CALC_MEASURED_SKEW", "SKEW_PROFILE", "UPDATE_DELAYED_GCODE"}
+			"SET_RETRACTION", "GET_RETRACTION", "SET_SKEW", "GET_CURRENT_SKEW", "CALC_MEASURED_SKEW", "SKEW_PROFILE", "UPDATE_DELAYED_GCODE", "SET_RPI_PIN", "CLEAR_RPI_PINS"}
 		
 		self.gcodeMessageTimer = None#threading.Timer(1, self.sendGCodeMessage)
 		self.gcodeWaitTimer = None
@@ -1787,8 +1787,13 @@ class TelegramPlugin(octoprint.plugin.EventHandlerPlugin,
 					self.gcodeWaitTimer = threading.Timer(4, self.stopGCodeWait)
 					self.gcodeWaitTimer.start()
 					self._logger.debug("Sent GCode confirmed")
+					self.tcmd.gcodeStatus.wrongGcodeCount = 0
 				elif self.tcmd.gcodeStatus.sendingGCode:
-					self._logger.debug("Wrong GCode: " + gcode)												 
+					self.tcmd.gcodeStatus.wrongGcodeCount += 1
+					self._logger.debug("Wrong GCode: " + gcode)
+					if self.tcmd.gcodeStatus.wrongGcodeCount > 5:
+						self.tcmd.gcodeStatus.sendingGCode = False
+						self.tcmd.gcodeStatus.wrongGcodeCount = 0
 			return
 		except AttributeError:
 			return
