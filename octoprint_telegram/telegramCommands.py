@@ -99,11 +99,11 @@ class TCMD():
 			self.gcodeStatus.menuMsgID = None
 			#self.gcodeStatus.waitingForGCode = False
 			gcode = parameter
-			if gcode.split(' ',1)[0].upper() != 'M117':
+			if gcode.split(' ',1)[0].upper() != 'M117' and self.main.filterRegexGCode.match(gcode.split(' ',1)[0]):
 				gcode = gcode.upper();
 			else:
 				gcodeSplit = gcode.split(' ',1);
-				gcode = gcodeSplit[0].upper() + ' ' + gcodeSplit[1]
+				gcode = gcodeSplit[0].upper() + ' ' + gcodeSplit[1] if len(gcodeSplit) > 1 else gcodeSplit[0].upper()
 			if not self.main._printer.is_printing():
 				self.main.send_msg(self.gEmo('info') + gettext(" Sending GCode: '") + gcode.replace('_','\_') + "'",chatID=chat_id, msg_id = msg_id,markup="Markdown")
 				#self.gcodeStatus.infoMsgID = self.getUpdateMsgId(self.gcodeStatus.returnChatID)

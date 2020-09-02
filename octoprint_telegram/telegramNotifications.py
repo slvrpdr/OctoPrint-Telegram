@@ -172,7 +172,9 @@ class TMSG():
 
 	def msgPrintFailed(self, payload, **kwargs):
 		self.main.shut_up = {}
-		self._sendNotification(payload, **kwargs)
+		status = self.main._printer.get_current_data()
+		if status['state']['flags']['printing']:
+			self._sendNotification(payload, **kwargs)
 
 	def msgPaused(self, payload, **kwargs):
 		self._sendNotification(payload, **kwargs)
@@ -195,7 +197,9 @@ class TMSG():
 		self._sendNotification(payload, **kwargs)
 		
 	def msgCancelled(self, payload, **kwargs):
-		self._sendNotification(payload, **kwargs)
+		status = self.main._printer.get_current_data()
+		if status['state']['flags']['printing']:
+			self._sendNotification(payload, **kwargs)
 		
 	def _sendNotification(self, payload, **kwargs):
 		status = self.main._printer.get_current_data()

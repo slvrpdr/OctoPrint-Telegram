@@ -3,8 +3,8 @@ from PIL import Image
 from subprocess import Popen, PIPE
 import threading, requests, re, time, datetime, StringIO, json, random, logging, traceback, io, collections, os, flask,base64,PIL, pkg_resources,subprocess,zipfile,glob,resource #imageio
 import octoprint.plugin, octoprint.util, octoprint.filemanager
-from flask.ext.babel import gettext
-from flask.ext.login import current_user
+from flask_babel import gettext
+from flask_login import current_user
 from .telegramCommands import TCMD # telegramCommands.
 from .telegramNotifications import TMSG # telegramNotifications
 from .telegramNotifications import telegramMsgDict # dict of known notification messages
@@ -511,7 +511,7 @@ class TelegramPlugin(octoprint.plugin.EventHandlerPlugin,
 			"SET_GCODE_VARIABLE", "SET_PIN", "SET_LED", "SET_SERVO", "MANUAL_STEPPER", "PROBE", "QUERY_PROBE", "PROBE_ACCURACY", "PROBE_CALIBRATE", "BLTOUCH_DEBUG", "DELTA_CALIBRATE", "DELTA_ANALYZE", "BED_TILT_CALIBRATE",
 			"BED_MESH_CALIBRATE", "BED_MESH_OUTPUT", "BED_MESH_MAP", "BED_MESH_CLEAR", "BED_MESH_PROFILE", "BED_SCREWS_ADJUST", "SCREWS_TILT_CALCULATE", "Z_TILT_ADJUST", "SET_DUAL_CARRIAGE", "DUMP_TMC", "INIT_TMC",
 			"INIT_TMC", "SET_TMC_CURRENT", "SET_TMC_FIELD", "ENDSTOP_PHASE_CALIBRATE", "FORCE_MOVE", "SET_KINEMATIC_POSITION", "RESPOND", "PAUSE", "RESUME", "CLEAR_PAUSE", "QUERY_FILAMENT_SENSOR", "SET_FILAMENT_SENSOR",
-			"SET_RETRACTION", "GET_RETRACTION", "SET_SKEW", "GET_CURRENT_SKEW", "CALC_MEASURED_SKEW", "SKEW_PROFILE", "UPDATE_DELAYED_GCODE", "SET_RPI_PIN", "CLEAR_RPI_PINS"}
+			"SET_RETRACTION", "GET_RETRACTION", "SET_SKEW", "GET_CURRENT_SKEW", "CALC_MEASURED_SKEW", "SKEW_PROFILE", "UPDATE_DELAYED_GCODE", "SET_RPI_PIN", "CLEAR_RPI_PINS", "SET_STEPPER_ENABLE"}
 		
 		self.gcodeMessageTimer = None#threading.Timer(1, self.sendGCodeMessage)
 		self.gcodeWaitTimer = None
